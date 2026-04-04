@@ -1,12 +1,25 @@
-from flask import Flask, request, jsonify, render_template_string, g
+from flask import Flask, request, jsonify, render_template_string
 from datetime import datetime
-import sqlite3
+from supabase import create_client
+from supabase.lib.client_options import ClientOptions
 import os
 
 app = Flask(__name__)
 
-DATABASE = "panel.db"
-TIMEFRAMES = ["1h", "4h", "1d", "1w"]
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("SUPABASE_URL ve SUPABASE_KEY environment variable olarak tanımlı olmalı.")
+
+supabase = create_client(
+    SUPABASE_URL,
+    SUPABASE_KEY,
+    options=ClientOptions(
+        auto_refresh_token=False,
+        persist_session=False
+    )
+)
 
 HTML = """
 <!doctype html>
@@ -308,7 +321,7 @@ HTML = """
   </div>
 
   <div class="footer-note">
-    Not: LONG/AL yeşil, SHORT/SAT kırmızı, veri yok sarı tonunda gösterilir.
+    Not: Watchlist panel üzerinden yönetilir. LONG/AL yeşil, SHORT/SAT kırmızı gösterilir.
   </div>
 
 <script>
@@ -444,101 +457,29 @@ setInterval(loadData, 15000);
 </html>
 """
 
+def ensure_defaults():
+    existing = supabase.table("watchlist").select("symbol").execute()
+    if existing.data:
+        return
 
-def get_db():
-    if "db" not in g:
-        g.db = sqlite3.connect(DATABASE)
-        g.db.row_factory = sqlite3.Row
-    return g.db
+    defaults = ["THYAO", "ASELS", "TUPRS", "EREGL", "KCHOL"]
+    watch_rows = [{"symbol": s} for s in defaults]
+    signal_rows = [{"symbol": s} for s in defaults]
 
-
-@app.teardown_appcontext
-def close_db(exception):
-    db = g.pop("db", None)
-    if db is not None:
-        db.close()
-
-
-def init_db():
-    db = get_db()
-
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS watchlist (
-            symbol TEXT PRIMARY KEY,
-            created_at TEXT NOT NULL
-        )
-    """)
-
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS signals (
-            symbol TEXT PRIMARY KEY,
-            tf_1h TEXT NOT NULL DEFAULT 'YOK',
-            tf_4h TEXT NOT NULL DEFAULT 'YOK',
-            tf_1d TEXT NOT NULL DEFAULT 'YOK',
-            tf_1w TEXT NOT NULL DEFAULT 'YOK',
-            updated_at TEXT NOT NULL DEFAULT '',
-            last_tf TEXT NOT NULL DEFAULT ''
-        )
-    """)
-
-    db.commit()
-
-
-def seed_default_watchlist():
-    db = get_db()
-    count = db.execute("SELECT COUNT(*) AS c FROM watchlist").fetchone()["c"]
-
-    if count == 0:
-        defaults = ["THYAO", "ASELS", "TUPRS", "EREGL", "KCHOL"]
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        for symbol in defaults:
-            db.execute(
-                "INSERT OR IGNORE INTO watchlist(symbol, created_at) VALUES (?, ?)",
-                (symbol, now)
-            )
-            db.execute(
-                """
-                INSERT OR IGNORE INTO signals(symbol, tf_1h, tf_4h, tf_1d, tf_1w, updated_at, last_tf)
-                VALUES (?, 'YOK', 'YOK', 'YOK', 'YOK', '', '')
-                """,
-                (symbol,)
-            )
-        db.commit()
-
-
-def ensure_symbol_exists(symbol):
-    db = get_db()
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    db.execute(
-        "INSERT OR IGNORE INTO watchlist(symbol, created_at) VALUES (?, ?)",
-        (symbol, now)
-    )
-    db.execute(
-        """
-        INSERT OR IGNORE INTO signals(symbol, tf_1h, tf_4h, tf_1d, tf_1w, updated_at, last_tf)
-        VALUES (?, 'YOK', 'YOK', 'YOK', 'YOK', '', '')
-        """,
-        (symbol,)
-    )
-    db.commit()
-
+    supabase.table("watchlist").upsert(watch_rows, on_conflict="symbol").execute()
+    supabase.table("signals").upsert(signal_rows, on_conflict="symbol").execute()
 
 def is_long(val):
     return val in ["LONG", "AL"]
 
-
 def is_short(val):
     return val in ["SHORT", "SAT"]
-
 
 def calc_counts(row):
     vals = [row["1h"], row["4h"], row["1d"], row["1w"]]
     long_count = sum(1 for v in vals if is_long(v))
     short_count = sum(1 for v in vals if is_short(v))
     return long_count, short_count
-
 
 def get_row_class(row):
     long_count, short_count = calc_counts(row)
@@ -547,7 +488,6 @@ def get_row_class(row):
     if short_count >= 3:
         return "row-short"
     return ""
-
 
 def get_score_text(row):
     long_count, short_count = calc_counts(row)
@@ -559,52 +499,38 @@ def get_score_text(row):
         return "0/4"
     return f"{long_count}-{short_count}"
 
-
 def sort_key(row):
     long_count, short_count = calc_counts(row)
     strength = max(long_count, short_count)
     direction_priority = 1 if long_count > short_count else 0
     return (-strength, -direction_priority, row["symbol"])
 
-
-@app.before_request
-def before_request():
-    init_db()
-    seed_default_watchlist()
-
-
 @app.route("/")
 def index():
+    ensure_defaults()
     return render_template_string(HTML)
-
 
 @app.route("/api/table")
 def api_table():
-    db = get_db()
+    ensure_defaults()
 
-    query = """
-        SELECT
-            w.symbol AS symbol,
-            COALESCE(s.tf_1h, 'YOK') AS "1h",
-            COALESCE(s.tf_4h, 'YOK') AS "4h",
-            COALESCE(s.tf_1d, 'YOK') AS "1d",
-            COALESCE(s.tf_1w, 'YOK') AS "1w",
-            COALESCE(s.updated_at, '') AS updated_at,
-            COALESCE(s.last_tf, '') AS last_tf
-        FROM watchlist w
-        LEFT JOIN signals s ON s.symbol = w.symbol
-    """
+    watch_res = supabase.table("watchlist").select("symbol").execute()
+    sig_res = supabase.table("signals").select("*").execute()
+
+    watchlist = [r["symbol"] for r in (watch_res.data or [])]
+    signals_map = {r["symbol"]: r for r in (sig_res.data or [])}
 
     rows = []
-    for r in db.execute(query).fetchall():
+    for symbol in watchlist:
+        s = signals_map.get(symbol, {})
         item = {
-            "symbol": r["symbol"],
-            "1h": r["1h"],
-            "4h": r["4h"],
-            "1d": r["1d"],
-            "1w": r["1w"],
-            "updated_at": r["updated_at"],
-            "last_tf": r["last_tf"]
+            "symbol": symbol,
+            "1h": s.get("tf_1h", "YOK"),
+            "4h": s.get("tf_4h", "YOK"),
+            "1d": s.get("tf_1d", "YOK"),
+            "1w": s.get("tf_1w", "YOK"),
+            "updated_at": s.get("updated_at") or "",
+            "last_tf": s.get("last_tf") or ""
         }
         item["row_class"] = get_row_class(item)
         item["score_text"] = get_score_text(item)
@@ -612,7 +538,6 @@ def api_table():
 
     rows.sort(key=sort_key)
     return jsonify(rows)
-
 
 @app.route("/api/add", methods=["POST"])
 def add_symbol():
@@ -622,21 +547,26 @@ def add_symbol():
     if not symbol:
         return jsonify({"ok": False, "error": "Geçersiz hisse"}), 400
 
-    ensure_symbol_exists(symbol)
-    return jsonify({"ok": True, "symbol": symbol})
+    supabase.table("watchlist").upsert(
+        {"symbol": symbol},
+        on_conflict="symbol"
+    ).execute()
 
+    supabase.table("signals").upsert(
+        {"symbol": symbol},
+        on_conflict="symbol"
+    ).execute()
+
+    return jsonify({"ok": True, "symbol": symbol})
 
 @app.route("/api/remove", methods=["POST"])
 def remove_symbol():
     payload = request.get_json(force=True, silent=True) or {}
     symbol = str(payload.get("symbol", "")).upper().strip()
 
-    db = get_db()
-    db.execute("DELETE FROM watchlist WHERE symbol = ?", (symbol,))
-    db.commit()
+    supabase.table("watchlist").delete().eq("symbol", symbol).execute()
 
     return jsonify({"ok": True, "symbol": symbol})
-
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -651,35 +581,37 @@ def webhook():
             "error": "Geçersiz veri. Beklenen: symbol ve signals objesi"
         }), 400
 
-    ensure_symbol_exists(symbol)
+    valid = {"LONG", "SHORT", "NOTR", "AL", "SAT", "YOK"}
 
     tf_1h = str(signals.get("1h", "YOK")).upper().strip()
     tf_4h = str(signals.get("4h", "YOK")).upper().strip()
     tf_1d = str(signals.get("1d", "YOK")).upper().strip()
     tf_1w = str(signals.get("1w", "YOK")).upper().strip()
 
-    valid = {"LONG", "SHORT", "NOTR", "AL", "SAT", "YOK"}
     tf_1h = tf_1h if tf_1h in valid else "YOK"
     tf_4h = tf_4h if tf_4h in valid else "YOK"
     tf_1d = tf_1d if tf_1d in valid else "YOK"
     tf_1w = tf_1w if tf_1w in valid else "YOK"
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    db = get_db()
+    now = datetime.now().isoformat()
 
-    db.execute("""
-        INSERT INTO signals(symbol, tf_1h, tf_4h, tf_1d, tf_1w, updated_at, last_tf)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(symbol) DO UPDATE SET
-            tf_1h = excluded.tf_1h,
-            tf_4h = excluded.tf_4h,
-            tf_1d = excluded.tf_1d,
-            tf_1w = excluded.tf_1w,
-            updated_at = excluded.updated_at,
-            last_tf = excluded.last_tf
-    """, (symbol, tf_1h, tf_4h, tf_1d, tf_1w, now, "multi"))
+    supabase.table("watchlist").upsert(
+        {"symbol": symbol},
+        on_conflict="symbol"
+    ).execute()
 
-    db.commit()
+    supabase.table("signals").upsert(
+        {
+            "symbol": symbol,
+            "tf_1h": tf_1h,
+            "tf_4h": tf_4h,
+            "tf_1d": tf_1d,
+            "tf_1w": tf_1w,
+            "updated_at": now,
+            "last_tf": "multi"
+        },
+        on_conflict="symbol"
+    ).execute()
 
     return jsonify({
         "ok": True,
@@ -692,22 +624,26 @@ def webhook():
         }
     })
 
-
 @app.route("/seed")
 def seed():
-    db = get_db()
-    db.execute("""
-        UPDATE signals
-        SET tf_1h = 'YOK',
-            tf_4h = 'YOK',
-            tf_1d = 'YOK',
-            tf_1w = 'YOK',
-            updated_at = '',
-            last_tf = ''
-    """)
-    db.commit()
-    return jsonify({"ok": True, "message": "Sinyaller sıfırlandı."})
+    ensure_defaults()
+    sig_res = supabase.table("signals").select("symbol").execute()
+    symbols = [r["symbol"] for r in (sig_res.data or [])]
 
+    if symbols:
+        rows = [{
+            "symbol": s,
+            "tf_1h": "YOK",
+            "tf_4h": "YOK",
+            "tf_1d": "YOK",
+            "tf_1w": "YOK",
+            "updated_at": None,
+            "last_tf": ""
+        } for s in symbols]
+
+        supabase.table("signals").upsert(rows, on_conflict="symbol").execute()
+
+    return jsonify({"ok": True, "message": "Sinyaller sıfırlandı."})
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
