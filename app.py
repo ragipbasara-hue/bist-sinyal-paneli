@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify, render_template_string
 from datetime import datetime
 from supabase import create_client
-from supabase.lib.client_options import ClientOptions
 import requests
 import os
 
@@ -15,14 +14,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("SUPABASE_URL ve SUPABASE_KEY environment variable olarak tanımlı olmalı.")
 
-supabase = create_client(
-    SUPABASE_URL,
-    SUPABASE_KEY,
-    options=ClientOptions(
-        auto_refresh_token=False,
-        persist_session=False
-    )
-)
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 HTML = """
 <!doctype html>
