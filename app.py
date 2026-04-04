@@ -467,7 +467,7 @@ def ensure_defaults():
 
     defaults = ["THYAO", "ASELS", "TUPRS", "EREGL", "KCHOL"]
     watch_rows = [{"symbol": s} for s in defaults]
-    signal_rows = [{"symbol": s} for s in defaults]
+    signal_rows = [{"symbol": s, "alert_level": ""} for s in defaults]
 
     supabase.table("watchlist").upsert(watch_rows, on_conflict="symbol").execute()
     supabase.table("signals").upsert(signal_rows, on_conflict="symbol").execute()
@@ -528,15 +528,52 @@ def send_telegram_message(text):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-def count_long_short(tf_1h, tf_4h, tf_1d, tf_1w):
-    vals = [tf_1h, tf_4h, tf_1d, tf_1w]
-    long_count = sum(1 for v in vals if v in ["LONG", "AL"])
-    short_count = sum(1 for v in vals if v in ["SHORT", "SAT"])
-    return long_count, short_count
+def detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w):
+    long_1h = tf_1h in ["LONG", "AL"]
+    long_4h = tf_4h in ["LONG", "AL"]
+    long_1d = tf_1d in ["LONG", "AL"]
+    long_1w = tf_1w in ["LONG", "AL"]
 
-def format_signal_message(symbol, signals):
+    short_1h = tf_1h in ["SHORT", "SAT"]
+    short_4h = tf_4h in ["SHORT", "SAT"]
+    short_1d = tf_1d in ["SHORT", "SAT"]
+
+    # Çıkış mantığı önce
+    if short_1d:
+        return "BREAKDOWN"
+
+    if short_4h:
+        return "EXIT"
+
+    if short_1h and long_4h:
+        return "TRIM"
+
+    if short_1h:
+        return "WARN"
+
+    # Giriş mantığı
+    if long_1h and long_4h:
+        if long_1d:
+            if long_1w:
+                return "STRONG"
+            return "ENTRY"
+        return "WATCH"
+
+    return None
+
+def format_signal_message(symbol, level, signals):
+    titles = {
+        "WATCH": "👀 İzleme (Erken Trend)",
+        "ENTRY": "🟢 Giriş Sinyali",
+        "STRONG": "🚀 Güçlü Trend",
+        "WARN": "⚠️ Kâr Koruma Uyarısı",
+        "TRIM": "💰 Kısmi Realize Düşünülebilir",
+        "EXIT": "🔻 Ana Çıkış Sinyali",
+        "BREAKDOWN": "⛔ Trend Bozuldu"
+    }
+
     return (
-        f"📡 Güçlü Sinyal\n"
+        f"{titles[level]}\n\n"
         f"Varlık: {symbol}\n"
         f"1H: {signals.get('1h', 'YOK')}\n"
         f"4H: {signals.get('4h', 'YOK')}\n"
@@ -592,7 +629,7 @@ def add_symbol():
     ).execute()
 
     supabase.table("signals").upsert(
-        {"symbol": symbol},
+        {"symbol": symbol, "alert_level": ""},
         on_conflict="symbol"
     ).execute()
 
@@ -639,10 +676,18 @@ def webhook():
 
     now = datetime.now().isoformat()
 
+    # Watchlist'te yoksa ekle
     supabase.table("watchlist").upsert(
         {"symbol": symbol},
         on_conflict="symbol"
     ).execute()
+
+    existing = supabase.table("signals").select("alert_level").eq("symbol", symbol).execute()
+    last_level = ""
+    if existing.data:
+        last_level = existing.data[0].get("alert_level") or ""
+
+    level = detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w)
 
     supabase.table("signals").upsert(
         {
@@ -652,15 +697,14 @@ def webhook():
             "tf_1d": tf_1d,
             "tf_1w": tf_1w,
             "updated_at": now,
-            "last_tf": "multi"
+            "last_tf": "multi",
+            "alert_level": level or ""
         },
         on_conflict="symbol"
     ).execute()
 
-    long_count, short_count = count_long_short(tf_1h, tf_4h, tf_1d, tf_1w)
-
-    if long_count >= 3 or short_count >= 3:
-        telegram_text = format_signal_message(symbol, {
+    if level and level != last_level:
+        telegram_text = format_signal_message(symbol, level, {
             "1h": tf_1h,
             "4h": tf_4h,
             "1d": tf_1d,
@@ -676,7 +720,8 @@ def webhook():
             "4h": tf_4h,
             "1d": tf_1d,
             "1w": tf_1w
-        }
+        },
+        "level": level or ""
     })
 
 @app.route("/seed")
@@ -693,7 +738,8 @@ def seed():
             "tf_1d": "YOK",
             "tf_1w": "YOK",
             "updated_at": None,
-            "last_tf": ""
+            "last_tf": "",
+            "alert_level": ""
         } for s in symbols]
 
         supabase.table("signals").upsert(rows, on_conflict="symbol").execute()
