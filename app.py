@@ -554,17 +554,17 @@ def detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w):
 
 def format_signal_message(symbol, level, price):
     titles = {
-        "ERKEN_AL": "ERKEN AL",
-        "GUCLU_AL": "GÜÇLÜ AL",
-        "COK_GUCLU_AL": "ÇOK GÜÇLÜ AL",
-        "KAR_AL": "KÂR AL",
-        "CIK": "ÇIK",
-        "TREND_BITTI": "TREND BİTTİ"
+        "ERKEN_AL": "🟢 ERKEN AL",
+        "GUCLU_AL": "✅ GÜÇLÜ AL",
+        "COK_GUCLU_AL": "🚀 ÇOK GÜÇLÜ AL",
+        "KAR_AL": "⚠️ KÂR AL",
+        "CIK": "🔻 SAT",
+        "TREND_BITTI": "⛔ DÜŞÜŞ TRENDİ"
     }
 
-    title = titles.get(level, "")
+    title = titles.get(level, level or "")
 
-    return f"{symbol} — {title}\nFiyat: {price}"
+    return f"{title}\n{symbol}\nFiyat: {price}"
 
 @app.route("/")
 def index():
