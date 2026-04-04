@@ -1,12 +1,11 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, g
 from datetime import datetime
-import json
+import sqlite3
 import os
 
 app = Flask(__name__)
 
-DATA_FILE = "signals.json"
-WATCHLIST_FILE = "watchlist.json"
+DATABASE = "panel.db"
 TIMEFRAMES = ["1h", "4h", "1d", "1w"]
 
 HTML = """
@@ -309,7 +308,7 @@ HTML = """
   </div>
 
   <div class="footer-note">
-    Not: Watchlist artık panel üzerinden yönetilir. LONG/AL yeşil, SHORT/SAT kırmızı gösterilir.
+    Not: LONG/AL yeşil, SHORT/SAT kırmızı, veri yok sarı tonunda gösterilir.
   </div>
 
 <script>
@@ -401,7 +400,6 @@ async function loadData() {
 async function addSymbol() {
   const el = document.getElementById('newSymbol');
   const symbol = el.value.trim().toUpperCase();
-
   if (!symbol) return;
 
   await fetch('/api/add', {
@@ -447,64 +445,84 @@ setInterval(loadData, 15000);
 """
 
 
-def load_json_file(path, default_value):
-    if not os.path.exists(path):
-        return default_value
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return default_value
+def get_db():
+    if "db" not in g:
+        g.db = sqlite3.connect(DATABASE)
+        g.db.row_factory = sqlite3.Row
+    return g.db
 
 
-def save_json_file(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+@app.teardown_appcontext
+def close_db(exception):
+    db = g.pop("db", None)
+    if db is not None:
+        db.close()
 
 
-def load_signals():
-    return load_json_file(DATA_FILE, {})
+def init_db():
+    db = get_db()
+
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS watchlist (
+            symbol TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS signals (
+            symbol TEXT PRIMARY KEY,
+            tf_1h TEXT NOT NULL DEFAULT 'YOK',
+            tf_4h TEXT NOT NULL DEFAULT 'YOK',
+            tf_1d TEXT NOT NULL DEFAULT 'YOK',
+            tf_1w TEXT NOT NULL DEFAULT 'YOK',
+            updated_at TEXT NOT NULL DEFAULT '',
+            last_tf TEXT NOT NULL DEFAULT ''
+        )
+    """)
+
+    db.commit()
 
 
-def save_signals(data):
-    save_json_file(DATA_FILE, data)
+def seed_default_watchlist():
+    db = get_db()
+    count = db.execute("SELECT COUNT(*) AS c FROM watchlist").fetchone()["c"]
+
+    if count == 0:
+        defaults = ["THYAO", "ASELS", "TUPRS", "EREGL", "KCHOL"]
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        for symbol in defaults:
+            db.execute(
+                "INSERT OR IGNORE INTO watchlist(symbol, created_at) VALUES (?, ?)",
+                (symbol, now)
+            )
+            db.execute(
+                """
+                INSERT OR IGNORE INTO signals(symbol, tf_1h, tf_4h, tf_1d, tf_1w, updated_at, last_tf)
+                VALUES (?, 'YOK', 'YOK', 'YOK', 'YOK', '', '')
+                """,
+                (symbol,)
+            )
+        db.commit()
 
 
-def load_watchlist():
-    watchlist = load_json_file(WATCHLIST_FILE, [])
-    cleaned = []
-    for symbol in watchlist:
-        s = str(symbol).upper().strip()
-        if s and s not in cleaned:
-            cleaned.append(s)
-    return cleaned
+def ensure_symbol_exists(symbol):
+    db = get_db()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-
-def save_watchlist(watchlist):
-    cleaned = []
-    for symbol in watchlist:
-        s = str(symbol).upper().strip()
-        if s and s not in cleaned:
-            cleaned.append(s)
-    save_json_file(WATCHLIST_FILE, cleaned)
-
-
-def ensure_watchlist_file():
-    if not os.path.exists(WATCHLIST_FILE):
-        save_watchlist(["THYAO", "ASELS", "TUPRS", "EREGL", "KCHOL"])
-
-
-def ensure_signals_for_watchlist(data, watchlist):
-    for symbol in watchlist:
-        data.setdefault(symbol, {
-            "1h": "YOK",
-            "4h": "YOK",
-            "1d": "YOK",
-            "1w": "YOK",
-            "updated_at": "",
-            "last_tf": ""
-        })
-    return data
+    db.execute(
+        "INSERT OR IGNORE INTO watchlist(symbol, created_at) VALUES (?, ?)",
+        (symbol, now)
+    )
+    db.execute(
+        """
+        INSERT OR IGNORE INTO signals(symbol, tf_1h, tf_4h, tf_1d, tf_1w, updated_at, last_tf)
+        VALUES (?, 'YOK', 'YOK', 'YOK', 'YOK', '', '')
+        """,
+        (symbol,)
+    )
+    db.commit()
 
 
 def is_long(val):
@@ -516,12 +534,7 @@ def is_short(val):
 
 
 def calc_counts(row):
-    vals = [
-        row.get("1h", "YOK"),
-        row.get("4h", "YOK"),
-        row.get("1d", "YOK"),
-        row.get("1w", "YOK")
-    ]
+    vals = [row["1h"], row["4h"], row["1d"], row["1w"]]
     long_count = sum(1 for v in vals if is_long(v))
     short_count = sum(1 for v in vals if is_short(v))
     return long_count, short_count
@@ -554,30 +567,44 @@ def sort_key(row):
     return (-strength, -direction_priority, row["symbol"])
 
 
+@app.before_request
+def before_request():
+    init_db()
+    seed_default_watchlist()
+
+
 @app.route("/")
 def index():
-    ensure_watchlist_file()
     return render_template_string(HTML)
 
 
 @app.route("/api/table")
 def api_table():
-    ensure_watchlist_file()
-    watchlist = load_watchlist()
-    data = ensure_signals_for_watchlist(load_signals(), watchlist)
-    save_signals(data)
+    db = get_db()
+
+    query = """
+        SELECT
+            w.symbol AS symbol,
+            COALESCE(s.tf_1h, 'YOK') AS "1h",
+            COALESCE(s.tf_4h, 'YOK') AS "4h",
+            COALESCE(s.tf_1d, 'YOK') AS "1d",
+            COALESCE(s.tf_1w, 'YOK') AS "1w",
+            COALESCE(s.updated_at, '') AS updated_at,
+            COALESCE(s.last_tf, '') AS last_tf
+        FROM watchlist w
+        LEFT JOIN signals s ON s.symbol = w.symbol
+    """
 
     rows = []
-    for symbol in watchlist:
-        row = data.get(symbol, {})
+    for r in db.execute(query).fetchall():
         item = {
-            "symbol": symbol,
-            "1h": row.get("1h", "YOK"),
-            "4h": row.get("4h", "YOK"),
-            "1d": row.get("1d", "YOK"),
-            "1w": row.get("1w", "YOK"),
-            "updated_at": row.get("updated_at", ""),
-            "last_tf": row.get("last_tf", "")
+            "symbol": r["symbol"],
+            "1h": r["1h"],
+            "4h": r["4h"],
+            "1d": r["1d"],
+            "1w": r["1w"],
+            "updated_at": r["updated_at"],
+            "last_tf": r["last_tf"]
         }
         item["row_class"] = get_row_class(item)
         item["score_text"] = get_score_text(item)
@@ -589,42 +616,30 @@ def api_table():
 
 @app.route("/api/add", methods=["POST"])
 def add_symbol():
-    ensure_watchlist_file()
     payload = request.get_json(force=True, silent=True) or {}
     symbol = str(payload.get("symbol", "")).upper().strip()
 
     if not symbol:
         return jsonify({"ok": False, "error": "Geçersiz hisse"}), 400
 
-    watchlist = load_watchlist()
-    if symbol not in watchlist:
-        watchlist.append(symbol)
-        save_watchlist(watchlist)
-
-    data = load_signals()
-    data = ensure_signals_for_watchlist(data, watchlist)
-    save_signals(data)
-
+    ensure_symbol_exists(symbol)
     return jsonify({"ok": True, "symbol": symbol})
 
 
 @app.route("/api/remove", methods=["POST"])
 def remove_symbol():
-    ensure_watchlist_file()
     payload = request.get_json(force=True, silent=True) or {}
     symbol = str(payload.get("symbol", "")).upper().strip()
 
-    watchlist = load_watchlist()
-    if symbol in watchlist:
-        watchlist.remove(symbol)
-        save_watchlist(watchlist)
+    db = get_db()
+    db.execute("DELETE FROM watchlist WHERE symbol = ?", (symbol,))
+    db.commit()
 
     return jsonify({"ok": True, "symbol": symbol})
 
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    ensure_watchlist_file()
     payload = request.get_json(force=True, silent=True) or {}
 
     symbol = str(payload.get("symbol", "")).upper().strip()
@@ -636,46 +651,62 @@ def webhook():
             "error": "Geçersiz veri. Beklenen: symbol ve signals objesi"
         }), 400
 
-    watchlist = load_watchlist()
-    if symbol not in watchlist:
-        watchlist.append(symbol)
-        save_watchlist(watchlist)
+    ensure_symbol_exists(symbol)
 
-    data = ensure_signals_for_watchlist(load_signals(), watchlist)
+    tf_1h = str(signals.get("1h", "YOK")).upper().strip()
+    tf_4h = str(signals.get("4h", "YOK")).upper().strip()
+    tf_1d = str(signals.get("1d", "YOK")).upper().strip()
+    tf_1w = str(signals.get("1w", "YOK")).upper().strip()
 
-    data.setdefault(symbol, {
-        "1h": "YOK",
-        "4h": "YOK",
-        "1d": "YOK",
-        "1w": "YOK",
-        "updated_at": "",
-        "last_tf": ""
-    })
+    valid = {"LONG", "SHORT", "NOTR", "AL", "SAT", "YOK"}
+    tf_1h = tf_1h if tf_1h in valid else "YOK"
+    tf_4h = tf_4h if tf_4h in valid else "YOK"
+    tf_1d = tf_1d if tf_1d in valid else "YOK"
+    tf_1w = tf_1w if tf_1w in valid else "YOK"
 
-    for tf in TIMEFRAMES:
-        val = str(signals.get(tf, "")).upper().strip()
-        if val in ["LONG", "SHORT", "NOTR", "AL", "SAT"]:
-            data[symbol][tf] = val
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db = get_db()
 
-    data[symbol]["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    data[symbol]["last_tf"] = "multi"
+    db.execute("""
+        INSERT INTO signals(symbol, tf_1h, tf_4h, tf_1d, tf_1w, updated_at, last_tf)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(symbol) DO UPDATE SET
+            tf_1h = excluded.tf_1h,
+            tf_4h = excluded.tf_4h,
+            tf_1d = excluded.tf_1d,
+            tf_1w = excluded.tf_1w,
+            updated_at = excluded.updated_at,
+            last_tf = excluded.last_tf
+    """, (symbol, tf_1h, tf_4h, tf_1d, tf_1w, now, "multi"))
 
-    save_signals(data)
+    db.commit()
 
     return jsonify({
         "ok": True,
         "symbol": symbol,
-        "signals": signals
+        "signals": {
+            "1h": tf_1h,
+            "4h": tf_4h,
+            "1d": tf_1d,
+            "1w": tf_1w
+        }
     })
 
 
 @app.route("/seed")
 def seed():
-    ensure_watchlist_file()
-    watchlist = load_watchlist()
-    data = ensure_signals_for_watchlist({}, watchlist)
-    save_signals(data)
-    return jsonify({"ok": True, "message": "Boş sinyal verisi oluşturuldu."})
+    db = get_db()
+    db.execute("""
+        UPDATE signals
+        SET tf_1h = 'YOK',
+            tf_4h = 'YOK',
+            tf_1d = 'YOK',
+            tf_1w = 'YOK',
+            updated_at = '',
+            last_tf = ''
+    """)
+    db.commit()
+    return jsonify({"ok": True, "message": "Sinyaller sıfırlandı."})
 
 
 if __name__ == "__main__":
