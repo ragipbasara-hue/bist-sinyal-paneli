@@ -538,7 +538,7 @@ def detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w):
     short_4h = tf_4h in ["SHORT", "SAT"]
     short_1d = tf_1d in ["SHORT", "SAT"]
 
-    # ❗ ÇIKIŞ ÖNCELİKLİ
+    # EXIT mantığı
     if short_1d:
         return "TREND_BITTI"
 
@@ -548,7 +548,7 @@ def detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w):
     if short_1h:
         return "KAR_AL"
 
-    # ✅ GİRİŞ
+    # LONG mantığı
     if long_1h and long_4h and long_1d and long_1w:
         return "COK_GUCLU_AL"
 
@@ -570,9 +570,7 @@ def format_signal_message(symbol, level, price):
         "TREND_BITTI": "TREND BİTTİ"
     }
 
-    title = titles.get(level, "")
-
-    return f"{symbol} — {title}\nFiyat: {price}"
+    return f"{symbol} — {titles.get(level, '')}\nFiyat: {price}"
 
 @app.route("/")
 def index():
