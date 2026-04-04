@@ -2,12 +2,15 @@ from flask import Flask, request, jsonify, render_template_string
 from datetime import datetime
 from supabase import create_client
 from supabase.lib.client_options import ClientOptions
+import requests
 import os
 
 app = Flask(__name__)
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("SUPABASE_URL ve SUPABASE_KEY environment variable olarak tanımlı olmalı.")
@@ -265,7 +268,7 @@ HTML = """
 
   <div class="summary">
     <div class="summary-card">
-      <div class="summary-title">İzlenen Hisse</div>
+      <div class="summary-title">İzlenen Varlık</div>
       <div class="summary-value" id="sumTotal">0</div>
     </div>
     <div class="summary-card">
@@ -287,7 +290,7 @@ HTML = """
   </div>
 
   <div class="toolbar">
-    <input id="search" placeholder="Hisse ara..." oninput="renderTable()">
+    <input id="search" placeholder="Hisse/Coin ara..." oninput="renderTable()">
     <select id="filter" onchange="renderTable()">
       <option value="ALL">Tümü</option>
       <option value="LONG">En az 1 LONG</option>
@@ -297,7 +300,7 @@ HTML = """
       <option value="STRONG_LONG">3+ LONG</option>
       <option value="STRONG_SHORT">3+ SHORT</option>
     </select>
-    <input id="newSymbol" placeholder="Hisse ekle (THYAO)" onkeydown="if(event.key==='Enter') addSymbol()">
+    <input id="newSymbol" placeholder="Varlık ekle (THYAO/BTCUSDT)" onkeydown="if(event.key==='Enter') addSymbol()">
     <button onclick="addSymbol()">Ekle</button>
     <button onclick="loadData()">Yenile</button>
     <button onclick="toggleTheme()">🌗 Tema</button>
@@ -307,7 +310,7 @@ HTML = """
     <table>
       <thead>
         <tr>
-          <th>Hisse</th>
+          <th>Varlık</th>
           <th>Skor</th>
           <th>1 Saat</th>
           <th>4 Saat</th>
@@ -321,7 +324,7 @@ HTML = """
   </div>
 
   <div class="footer-note">
-    Not: Watchlist panel üzerinden yönetilir. LONG/AL yeşil, SHORT/SAT kırmızı gösterilir.
+    Not: LONG/AL yeşil, SHORT/SAT kırmızı gösterilir. Watchlist panel üzerinden yönetilir.
   </div>
 
 <script>
@@ -505,6 +508,42 @@ def sort_key(row):
     direction_priority = 1 if long_count > short_count else 0
     return (-strength, -direction_priority, row["symbol"])
 
+def send_telegram_message(text):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return {"ok": False, "error": "Telegram env eksik"}
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text
+    }
+
+    try:
+        r = requests.post(url, json=payload, timeout=15)
+        return {
+            "ok": r.ok,
+            "status_code": r.status_code,
+            "response": r.text
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def count_long_short(tf_1h, tf_4h, tf_1d, tf_1w):
+    vals = [tf_1h, tf_4h, tf_1d, tf_1w]
+    long_count = sum(1 for v in vals if v in ["LONG", "AL"])
+    short_count = sum(1 for v in vals if v in ["SHORT", "SAT"])
+    return long_count, short_count
+
+def format_signal_message(symbol, signals):
+    return (
+        f"📡 Güçlü Sinyal\n"
+        f"Varlık: {symbol}\n"
+        f"1H: {signals.get('1h', 'YOK')}\n"
+        f"4H: {signals.get('4h', 'YOK')}\n"
+        f"1D: {signals.get('1d', 'YOK')}\n"
+        f"1W: {signals.get('1w', 'YOK')}"
+    )
+
 @app.route("/")
 def index():
     ensure_defaults()
@@ -545,7 +584,7 @@ def add_symbol():
     symbol = str(payload.get("symbol", "")).upper().strip()
 
     if not symbol:
-        return jsonify({"ok": False, "error": "Geçersiz hisse"}), 400
+        return jsonify({"ok": False, "error": "Geçersiz varlık"}), 400
 
     supabase.table("watchlist").upsert(
         {"symbol": symbol},
@@ -567,6 +606,11 @@ def remove_symbol():
     supabase.table("watchlist").delete().eq("symbol", symbol).execute()
 
     return jsonify({"ok": True, "symbol": symbol})
+
+@app.route("/test-telegram")
+def test_telegram():
+    result = send_telegram_message("✅ Telegram bağlantı testi başarılı.")
+    return jsonify(result)
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -612,6 +656,17 @@ def webhook():
         },
         on_conflict="symbol"
     ).execute()
+
+    long_count, short_count = count_long_short(tf_1h, tf_4h, tf_1d, tf_1w)
+
+    if long_count >= 3 or short_count >= 3:
+        telegram_text = format_signal_message(symbol, {
+            "1h": tf_1h,
+            "4h": tf_4h,
+            "1d": tf_1d,
+            "1w": tf_1w
+        })
+        send_telegram_message(telegram_text)
 
     return jsonify({
         "ok": True,
