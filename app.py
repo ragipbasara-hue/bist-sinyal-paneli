@@ -562,7 +562,9 @@ def format_signal_message(symbol, level, price):
         "TREND_BITTI": "TREND BİTTİ"
     }
 
-    return f"{symbol} — {titles.get(level, '')}\nFiyat: {price}"
+    title = titles.get(level, "")
+
+    return f"{symbol} — {title}\nFiyat: {price}"
 
 @app.route("/")
 def index():
