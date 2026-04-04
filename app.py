@@ -561,24 +561,32 @@ def detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w):
 
     return None
 
-def format_signal_message(symbol, level, signals):
+def format_signal_message(symbol, level, price):
     titles = {
-        "WATCH": "👀 İzleme (Erken Trend)",
+        "WATCH": "👀 İzleme",
         "ENTRY": "🟢 Giriş Sinyali",
         "STRONG": "🚀 Güçlü Trend",
-        "WARN": "⚠️ Kâr Koruma Uyarısı",
-        "TRIM": "💰 Kısmi Realize Düşünülebilir",
-        "EXIT": "🔻 Ana Çıkış Sinyali",
+        "WARN": "⚠️ Kâr Koruma",
+        "TRIM": "💰 Kısmi Realize",
+        "EXIT": "🔻 Ana Çıkış",
         "BREAKDOWN": "⛔ Trend Bozuldu"
+    }
+
+    notes = {
+        "WATCH": "Trend oluşuyor, takipte kal.",
+        "ENTRY": "Trend yukarı, erken dahil olunabilir.",
+        "STRONG": "Trend güçlü, momentum hizalı.",
+        "WARN": "Trend zayıflıyor, dikkat.",
+        "TRIM": "Pozisyon azaltılabilir.",
+        "EXIT": "Trend kırılıyor.",
+        "BREAKDOWN": "Pozisyon kapatılmalı."
     }
 
     return (
         f"{titles[level]}\n\n"
-        f"Varlık: {symbol}\n"
-        f"1H: {signals.get('1h', 'YOK')}\n"
-        f"4H: {signals.get('4h', 'YOK')}\n"
-        f"1D: {signals.get('1d', 'YOK')}\n"
-        f"1W: {signals.get('1w', 'YOK')}"
+        f"{symbol}\n"
+        f"Fiyat: {price}\n\n"
+        f"{notes[level]}"
     )
 
 @app.route("/")
@@ -704,12 +712,8 @@ def webhook():
     ).execute()
 
     if level and level != last_level:
-        telegram_text = format_signal_message(symbol, level, {
-            "1h": tf_1h,
-            "4h": tf_4h,
-            "1d": tf_1d,
-            "1w": tf_1w
-        })
+        telegram_text = format_signal_message(symbol, level, price)
+      
         send_telegram_message(telegram_text)
 
     return jsonify({
