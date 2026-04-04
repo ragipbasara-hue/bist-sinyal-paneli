@@ -712,7 +712,7 @@ def webhook():
     error_message = ""
 
     try:
-        if level and level != last_level:
+        if level:
             telegram_text = format_signal_message(symbol, level, price)
             telegram_result = send_telegram_message(telegram_text)
     except Exception as e:
