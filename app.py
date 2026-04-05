@@ -528,19 +528,15 @@ def detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w):
 
     short_1h = tf_1h in ["SHORT", "SAT"]
     short_4h = tf_4h in ["SHORT", "SAT"]
-    short_1d = tf_1d in ["SHORT", "SAT"]
 
-    # EXIT mantığı
-    if short_1d:
-        return "TREND_BITTI"
-
-    if short_4h:
+    # Short tarafı: sadece çıkış yönetimi
+    if short_1h and short_4h:
         return "CIK"
 
     if short_1h:
         return "KAR_AL"
 
-    # LONG mantığı
+    # Long tarafı: giriş mantığı
     if long_1h and long_4h and long_1d and long_1w:
         return "COK_GUCLU_AL"
 
@@ -553,14 +549,13 @@ def detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w):
     return None
 
 def format_signal_message(symbol, level, price):
-    titles = {
-        "ERKEN_AL": "🟢 ERKEN AL",
-        "GUCLU_AL": "✅ GÜÇLÜ AL",
-        "COK_GUCLU_AL": "🚀 ÇOK GÜÇLÜ AL",
-        "KAR_AL": "⚠️ KÂR AL",
-        "CIK": "🔻 SAT",
-        "TREND_BITTI": "⛔ DÜŞÜŞ TRENDİ"
-    }
+   titles = {
+    "ERKEN_AL": "🟢 ERKEN AL",
+    "GUCLU_AL": "✅ GÜÇLÜ AL",
+    "COK_GUCLU_AL": "🚀 ÇOK GÜÇLÜ AL",
+    "KAR_AL": "⚠️ KÂR AL",
+    "CIK": "🔻 SAT"
+}
 
     title = titles.get(level, level or "")
 
