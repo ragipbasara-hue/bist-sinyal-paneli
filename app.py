@@ -302,14 +302,14 @@ HTML = """
     <table>
       <thead>
         <tr>
-          <th>Varlık</th>
-          <th>Skor</th>
-          <th>1 Saat</th>
-          <th>4 Saat</th>
-          <th>1 Gün</th>
-          <th>1 Hafta</th>
-          <th>Son Güncelleme</th>
-        </tr>
+  <th onclick="setSort('symbol')" style="cursor:pointer;">Varlık ↕</th>
+  <th onclick="setSort('score')" style="cursor:pointer;">Skor ↕</th>
+  <th onclick="setSort('1h')" style="cursor:pointer;">1 Saat ↕</th>
+  <th onclick="setSort('4h')" style="cursor:pointer;">4 Saat ↕</th>
+  <th onclick="setSort('1d')" style="cursor:pointer;">1 Gün ↕</th>
+  <th onclick="setSort('1w')" style="cursor:pointer;">1 Hafta ↕</th>
+  <th onclick="setSort('updated_at')" style="cursor:pointer;">Son Güncelleme ↕</th>
+</tr>
       </thead>
       <tbody id="tbody"></tbody>
     </table>
@@ -321,7 +321,69 @@ HTML = """
 
 <script>
 let rows = [];
+let currentSort = 'default';
+let sortDirection = 'desc';
 
+function signalRank(value) {
+  if (value === 'LONG' || value === 'AL') return 3;
+  if (value === 'NOTR') return 2;
+  if (value === 'SHORT' || value === 'SAT') return 1;
+  return 0;
+}
+
+function scoreRank(row) {
+  const longCount = countLong(row);
+  const shortCount = countShort(row);
+  return Math.max(longCount, shortCount);
+}
+
+function setSort(column) {
+  if (currentSort === column) {
+    sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+  } else {
+    currentSort = column;
+    sortDirection = 'desc';
+  }
+  renderTable();
+}
+
+function applySorting(data) {
+  const sorted = [...data];
+
+  if (currentSort === 'default') {
+    return sorted;
+  }
+
+  sorted.sort((a, b) => {
+    let aVal, bVal;
+
+    if (currentSort === 'symbol') {
+      aVal = a.symbol || '';
+      bVal = b.symbol || '';
+      return sortDirection === 'asc'
+        ? aVal.localeCompare(bVal)
+        : bVal.localeCompare(aVal);
+    }
+
+    if (currentSort === 'score') {
+      aVal = scoreRank(a);
+      bVal = scoreRank(b);
+    } else if (['1h', '4h', '1d', '1w'].includes(currentSort)) {
+      aVal = signalRank(a[currentSort]);
+      bVal = signalRank(b[currentSort]);
+    } else if (currentSort === 'updated_at') {
+      aVal = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+      bVal = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+    } else {
+      aVal = 0;
+      bVal = 0;
+    }
+
+    return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+  });
+
+  return sorted;
+}
 function signalClass(value) {
   if (value === 'LONG' || value === 'AL') return 'sig-LONG';
   if (value === 'SHORT' || value === 'SAT') return 'sig-SHORT';
@@ -373,10 +435,12 @@ function renderTable() {
   const filter = document.getElementById('filter').value;
 
   const filtered = rows.filter(r =>
-    r.symbol.includes(q) && matchesFilter(r, filter)
-  );
+  r.symbol.includes(q) && matchesFilter(r, filter)
+);
 
-  tbody.innerHTML = filtered.map(r => `
+const sortedRows = applySorting(filtered);
+
+  tbody.innerHTML = sortedRows.map(r => `
     <tr class="${r.row_class || ''}">
       <td>
         <div class="symbol-cell">
