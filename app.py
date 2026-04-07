@@ -1,21 +1,25 @@
 from flask import Flask, request, jsonify, render_template_string
-from datetime 
+from datetime import datetime
 from supabase import create_client
 import requests
 import os
-from datetime import datetime
+
 
 def format_date(date_str):
     try:
         dt = datetime.fromisoformat(date_str)
         return dt.strftime("%d.%m.%Y %H:%M")
-    except:
-        return date_str
+    except Exception:
+        return date_str or ""
+
 
 app = Flask(__name__)
+
+
 @app.route("/health")
 def health():
     return {"ok": True}
+
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -263,6 +267,21 @@ HTML = """
       font-size: 24px;
       font-weight: 700;
     }
+
+    .time-cell {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .time-main {
+      font-weight: 600;
+    }
+
+    .time-sub {
+      font-size: 12px;
+      color: var(--muted);
+    }
   </style>
 </head>
 <body>
@@ -313,14 +332,14 @@ HTML = """
     <table>
       <thead>
         <tr>
-  <th onclick="setSort('symbol')" style="cursor:pointer;">Varlık ↕</th>
-  <th onclick="setSort('score')" style="cursor:pointer;">Skor ↕</th>
-  <th onclick="setSort('1h')" style="cursor:pointer;">1 Saat ↕</th>
-  <th onclick="setSort('4h')" style="cursor:pointer;">4 Saat ↕</th>
-  <th onclick="setSort('1d')" style="cursor:pointer;">1 Gün ↕</th>
-  <th onclick="setSort('1w')" style="cursor:pointer;">1 Hafta ↕</th>
-  <th onclick="setSort('updated_at')" style="cursor:pointer;">Son Güncelleme ↕</th>
-</tr>
+          <th onclick="setSort('symbol')" style="cursor:pointer;">Varlık ↕</th>
+          <th onclick="setSort('score')" style="cursor:pointer;">Skor ↕</th>
+          <th onclick="setSort('1h')" style="cursor:pointer;">1 Saat ↕</th>
+          <th onclick="setSort('4h')" style="cursor:pointer;">4 Saat ↕</th>
+          <th onclick="setSort('1d')" style="cursor:pointer;">1 Gün ↕</th>
+          <th onclick="setSort('1w')" style="cursor:pointer;">1 Hafta ↕</th>
+          <th onclick="setSort('updated_at')" style="cursor:pointer;">Son Güncelleme ↕</th>
+        </tr>
       </thead>
       <tbody id="tbody"></tbody>
     </table>
@@ -383,8 +402,11 @@ function applySorting(data) {
       aVal = signalRank(a[currentSort]);
       bVal = signalRank(b[currentSort]);
     } else if (currentSort === 'updated_at') {
-      aVal = a.updated_at ? new Date(a.updated_at).getTime() : 0;
-      bVal = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+      aVal = a.updated_at || '';
+      bVal = b.updated_at || '';
+      return sortDirection === 'asc'
+        ? aVal.localeCompare(bVal)
+        : bVal.localeCompare(aVal);
     } else {
       aVal = 0;
       bVal = 0;
@@ -395,6 +417,7 @@ function applySorting(data) {
 
   return sorted;
 }
+
 function signalClass(value) {
   if (value === 'LONG' || value === 'AL') return 'sig-LONG';
   if (value === 'SHORT' || value === 'SAT') return 'sig-SHORT';
@@ -446,30 +469,36 @@ function renderTable() {
   const filter = document.getElementById('filter').value;
 
   const filtered = rows.filter(r =>
-  r.symbol.includes(q) && matchesFilter(r, filter)
-);
+    r.symbol.includes(q) && matchesFilter(r, filter)
+  );
 
-const sortedRows = applySorting(filtered);
+  const sortedRows = applySorting(filtered);
 
-  tbody.innerHTML = sortedRows.map(r => `
-    <tr class="${r.row_class || ''}">
-      <td>
-        <div class="symbol-cell">
-          <span>${r.symbol}</span>
-          <button class="remove-btn" onclick="removeSymbol('${r.symbol}')">Sil</button>
-        </div>
-      </td>
-      <td><span class="score">${r.score_text || '-'}</span></td>
-      <td><span class="badge ${signalClass(r['1h'])}">${r['1h']}</span></td>
-      <td><span class="badge ${signalClass(r['4h'])}">${r['4h']}</span></td>
-      <td><span class="badge ${signalClass(r['1d'])}">${r['1d']}</span></td>
-      <td><span class="badge ${signalClass(r['1w'])}">${r['1w']}</span></td>
-      <td>
-        <div>${r.updated_at || '-'}</div>
-        <div class="small">${r.last_tf || ''}</div>
-      </td>
-    </tr>
-  `).join('');
+  tbody.innerHTML = sortedRows.map(r => {
+    const parts = (r.updated_at || '').split(' ');
+    const datePart = parts[0] || '';
+    const timePart = parts[1] || '-';
+
+    return `
+      <tr class="${r.row_class || ''}">
+        <td>
+          <div class="symbol-cell">
+            <span>${r.symbol}</span>
+            <button class="remove-btn" onclick="removeSymbol('${r.symbol}')">Sil</button>
+          </div>
+        </td>
+        <td><span class="score">${r.score_text || '-'}</span></td>
+        <td><span class="badge ${signalClass(r['1h'])}">${r['1h']}</span></td>
+        <td><span class="badge ${signalClass(r['4h'])}">${r['4h']}</span></td>
+        <td><span class="badge ${signalClass(r['1d'])}">${r['1d']}</span></td>
+        <td><span class="badge ${signalClass(r['1w'])}">${r['1w']}</span></td>
+        <td class="time-cell">
+          <div class="time-main">🕒 ${timePart}</div>
+          <div class="time-sub">${datePart}</div>
+        </td>
+      </tr>
+    `;
+  }).join('');
 
   updateSummary(filtered);
 }
@@ -527,6 +556,7 @@ setInterval(loadData, 15000);
 </html>
 """
 
+
 def ensure_defaults():
     existing = supabase.table("watchlist").select("symbol").execute()
     if existing.data:
@@ -539,17 +569,21 @@ def ensure_defaults():
     supabase.table("watchlist").upsert(watch_rows, on_conflict="symbol").execute()
     supabase.table("signals").upsert(signal_rows, on_conflict="symbol").execute()
 
+
 def is_long(val):
     return val in ["LONG", "AL"]
 
+
 def is_short(val):
     return val in ["SHORT", "SAT"]
+
 
 def calc_counts(row):
     vals = [row["1h"], row["4h"], row["1d"], row["1w"]]
     long_count = sum(1 for v in vals if is_long(v))
     short_count = sum(1 for v in vals if is_short(v))
     return long_count, short_count
+
 
 def get_row_class(row):
     long_count, short_count = calc_counts(row)
@@ -558,6 +592,7 @@ def get_row_class(row):
     if short_count >= 3:
         return "row-short"
     return ""
+
 
 def get_score_text(row):
     long_count, short_count = calc_counts(row)
@@ -569,11 +604,13 @@ def get_score_text(row):
         return "0/4"
     return f"{long_count}-{short_count}"
 
+
 def sort_key(row):
     long_count, short_count = calc_counts(row)
     strength = max(long_count, short_count)
     direction_priority = 1 if long_count > short_count else 0
     return (-strength, -direction_priority, row["symbol"])
+
 
 def send_telegram_message(text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -595,6 +632,7 @@ def send_telegram_message(text):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+
 def detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w):
     long_1h = tf_1h in ["LONG", "AL"]
     long_4h = tf_4h in ["LONG", "AL"]
@@ -604,14 +642,12 @@ def detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w):
     short_1h = tf_1h in ["SHORT", "SAT"]
     short_4h = tf_4h in ["SHORT", "SAT"]
 
-    # Short tarafı: sadece çıkış yönetimi
     if short_1h and short_4h:
         return "CIK"
 
     if short_1h:
         return "KAR_AL"
 
-    # Long tarafı: giriş mantığı
     if long_1h and long_4h and long_1d and long_1w:
         return "COK_GUCLU_AL"
 
@@ -622,6 +658,7 @@ def detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w):
         return "ERKEN_AL"
 
     return None
+
 
 def format_signal_message(symbol, level, price):
     titles = {
@@ -636,10 +673,12 @@ def format_signal_message(symbol, level, price):
     title = titles.get(level, level or "")
     return f"{symbol} — {title}\nFiyat: {price}"
 
+
 @app.route("/")
 def index():
     ensure_defaults()
     return render_template_string(HTML)
+
 
 @app.route("/api/table")
 def api_table():
@@ -654,20 +693,22 @@ def api_table():
     rows = []
     for symbol in watchlist:
         s = signals_map.get(symbol, {})
-       item = {
-    "symbol": symbol,
-    "1h": s.get("tf_1h", "YOK"),
-    "4h": s.get("tf_4h", "YOK"),
-    "1d": s.get("tf_1d", "YOK"),
-    "1w": s.get("tf_1w", "YOK"),
-    "updated_at": format_date(s.get("updated_at")) if s.get("updated_at") else "",
-    "last_tf": s.get("last_tf") or ""}
+        item = {
+            "symbol": symbol,
+            "1h": s.get("tf_1h", "YOK"),
+            "4h": s.get("tf_4h", "YOK"),
+            "1d": s.get("tf_1d", "YOK"),
+            "1w": s.get("tf_1w", "YOK"),
+            "updated_at": format_date(s.get("updated_at")) if s.get("updated_at") else "",
+            "last_tf": s.get("last_tf") or ""
+        }
         item["row_class"] = get_row_class(item)
         item["score_text"] = get_score_text(item)
         rows.append(item)
 
     rows.sort(key=sort_key)
     return jsonify(rows)
+
 
 @app.route("/api/add", methods=["POST"])
 def add_symbol():
@@ -689,6 +730,7 @@ def add_symbol():
 
     return jsonify({"ok": True, "symbol": symbol})
 
+
 @app.route("/api/remove", methods=["POST"])
 def remove_symbol():
     payload = request.get_json(force=True, silent=True) or {}
@@ -697,10 +739,12 @@ def remove_symbol():
     supabase.table("watchlist").delete().eq("symbol", symbol).execute()
     return jsonify({"ok": True, "symbol": symbol})
 
+
 @app.route("/test-telegram")
 def test_telegram():
     result = send_telegram_message("✅ Telegram bağlantı testi başarılı.")
     return jsonify(result)
+
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -782,6 +826,7 @@ def webhook():
         "error": error_message
     })
 
+
 @app.route("/seed")
 def seed():
     ensure_defaults()
@@ -803,6 +848,7 @@ def seed():
         supabase.table("signals").upsert(rows, on_conflict="symbol").execute()
 
     return jsonify({"ok": True, "message": "Sinyaller sıfırlandı."})
+
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
