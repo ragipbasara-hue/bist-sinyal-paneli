@@ -1,8 +1,16 @@
 from flask import Flask, request, jsonify, render_template_string
-from datetime import datetime
+from datetime 
 from supabase import create_client
 import requests
 import os
+from datetime import datetime
+
+def format_date(date_str):
+    try:
+        dt = datetime.fromisoformat(date_str)
+        return dt.strftime("%d.%m.%Y %H:%M")
+    except:
+        return date_str
 
 app = Flask(__name__)
 @app.route("/health")
@@ -646,15 +654,15 @@ def api_table():
     rows = []
     for symbol in watchlist:
         s = signals_map.get(symbol, {})
-        item = {
-            "symbol": symbol,
-            "1h": s.get("tf_1h", "YOK"),
-            "4h": s.get("tf_4h", "YOK"),
-            "1d": s.get("tf_1d", "YOK"),
-            "1w": s.get("tf_1w", "YOK"),
-            "updated_at": s.get("updated_at") or "",
-            "last_tf": s.get("last_tf") or ""
-        }
+       item = {
+    "symbol": symbol,
+    "1h": s.get("tf_1h", "YOK"),
+    "4h": s.get("tf_4h", "YOK"),
+    "1d": s.get("tf_1d", "YOK"),
+    "1w": s.get("tf_1w", "YOK"),
+    "updated_at": format_date(s.get("updated_at")) if s.get("updated_at") else "",
+    "last_tf": s.get("last_tf") or ""
+}
         item["row_class"] = get_row_class(item)
         item["score_text"] = get_score_text(item)
         rows.append(item)
