@@ -714,7 +714,7 @@ def process_webhook(payload):
         tf_1w = tf_1w if tf_1w in valid else "YOK"
 
         TR_TIMEZONE = timezone(timedelta(hours=3))
-        now = datetime.now(TR_TIMEZONE).isoformat().isoformat()
+        now = datetime.now(TR_TIMEZONE).isoformat()
 
         supabase.table("watchlist").upsert(
             {"symbol": symbol},
@@ -843,7 +843,7 @@ def webhook():
     tf_1d = tf_1d if tf_1d in valid else "YOK"
     tf_1w = tf_1w if tf_1w in valid else "YOK"
 
-    now = datetime.now().isoformat()
+    now = datetime.now(TR_TIMEZONE).isoformat()
 
     supabase.table("watchlist").upsert(
         {"symbol": symbol},
