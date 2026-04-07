@@ -1,9 +1,11 @@
 from flask import Flask, request, jsonify, render_template_string
 from datetime import datetime
 from supabase import create_client
+from datetime import datetime, timezone, timedelta
 import requests
 import os
 import threading
+
 
 def format_date(date_str):
     try:
@@ -354,6 +356,24 @@ let rows = [];
 let currentSort = 'default';
 let sortDirection = 'desc';
 
+function timeAgo(dateString) {
+    if (!dateString) return "-"
+
+    const now = new Date()
+    const past = new Date(dateString)
+
+    const diffMs = now - past
+    const diffMin = Math.floor(diffMs / 60000)
+    const diffHour = Math.floor(diffMin / 60)
+
+    if (diffMin < 1) return "şimdi"
+    if (diffMin < 60) return diffMin + " dk önce"
+    if (diffHour < 24) return diffHour + " saat önce"
+
+    const diffDay = Math.floor(diffHour / 24)
+    return diffDay + " gün önce"
+}
+
 function signalRank(value) {
   if (value === 'LONG' || value === 'AL') return 3;
   if (value === 'NOTR') return 2;
@@ -492,9 +512,9 @@ function renderTable() {
         <td><span class="badge ${signalClass(r['4h'])}">${r['4h']}</span></td>
         <td><span class="badge ${signalClass(r['1d'])}">${r['1d']}</span></td>
         <td><span class="badge ${signalClass(r['1w'])}">${r['1w']}</span></td>
-        <td class="time-cell">
+        <td class="time-cell" title="${r.updated_at}">
           <div class="time-main">🕒 ${timePart}</div>
-          <div class="time-sub">${datePart}</div>
+          <div class="time-sub">${timeAgo(r.updated_at)}</div>
         </td>
       </tr>
     `;
@@ -693,7 +713,8 @@ def process_webhook(payload):
         tf_1d = tf_1d if tf_1d in valid else "YOK"
         tf_1w = tf_1w if tf_1w in valid else "YOK"
 
-        now = datetime.now().isoformat()
+        TR_TIMEZONE = timezone(timedelta(hours=3))
+        now = datetime.now(TR_TIMEZONE).isoformat().isoformat()
 
         supabase.table("watchlist").upsert(
             {"symbol": symbol},
