@@ -3,7 +3,7 @@ from datetime import datetime
 from supabase import create_client
 import requests
 import os
-
+import threading
 
 def format_date(date_str):
     try:
@@ -672,7 +672,61 @@ def format_signal_message(symbol, level, price):
 
     title = titles.get(level, level or "")
     return f"{symbol} — {title}\nFiyat: {price}"
+def process_webhook(payload):
+    try:
+        symbol = str(payload.get("symbol", "")).upper().strip()
+        price = str(payload.get("price", "")).strip()
+        signals = payload.get("signals", {})
 
+        if not symbol or not isinstance(signals, dict):
+            return
+
+        valid = {"LONG", "SHORT", "NOTR", "AL", "SAT", "YOK"}
+
+        tf_1h = str(signals.get("1h", "YOK")).upper().strip()
+        tf_4h = str(signals.get("4h", "YOK")).upper().strip()
+        tf_1d = str(signals.get("1d", "YOK")).upper().strip()
+        tf_1w = str(signals.get("1w", "YOK")).upper().strip()
+
+        tf_1h = tf_1h if tf_1h in valid else "YOK"
+        tf_4h = tf_4h if tf_4h in valid else "YOK"
+        tf_1d = tf_1d if tf_1d in valid else "YOK"
+        tf_1w = tf_1w if tf_1w in valid else "YOK"
+
+        now = datetime.now().isoformat()
+
+        supabase.table("watchlist").upsert(
+            {"symbol": symbol},
+            on_conflict="symbol"
+        ).execute()
+
+        existing = supabase.table("signals").select("alert_level").eq("symbol", symbol).execute()
+        last_level = ""
+        if existing.data:
+            last_level = existing.data[0].get("alert_level") or ""
+
+        level = detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w)
+
+        supabase.table("signals").upsert(
+            {
+                "symbol": symbol,
+                "tf_1h": tf_1h,
+                "tf_4h": tf_4h,
+                "tf_1d": tf_1d,
+                "tf_1w": tf_1w,
+                "updated_at": now,
+                "last_tf": "multi",
+                "alert_level": level or ""
+            },
+            on_conflict="symbol"
+        ).execute()
+
+        if level and level != last_level:
+            telegram_text = format_signal_message(symbol, level, price)
+            send_telegram_message(telegram_text)
+
+    except Exception as e:
+        print("process_webhook error:", str(e))
 
 @app.route("/")
 def index():
@@ -750,15 +804,11 @@ def test_telegram():
 def webhook():
     payload = request.get_json(force=True, silent=True) or {}
 
-    symbol = str(payload.get("symbol", "")).upper().strip()
-    price = str(payload.get("price", "")).strip()
-    signals = payload.get("signals", {})
+    thread = threading.Thread(target=process_webhook, args=(payload,))
+    thread.daemon = True
+    thread.start()
 
-    if not symbol or not isinstance(signals, dict):
-        return jsonify({
-            "ok": False,
-            "error": "Geçersiz veri. Beklenen: symbol, price ve signals objesi"
-        }), 400
+    return jsonify({"ok": True}), 200
 
     valid = {"LONG", "SHORT", "NOTR", "AL", "SAT", "YOK"}
 
