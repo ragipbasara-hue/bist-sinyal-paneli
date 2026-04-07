@@ -661,8 +661,7 @@ def api_table():
     "1d": s.get("tf_1d", "YOK"),
     "1w": s.get("tf_1w", "YOK"),
     "updated_at": format_date(s.get("updated_at")) if s.get("updated_at") else "",
-    "last_tf": s.get("last_tf") or ""
-}
+    "last_tf": s.get("last_tf") or ""}
         item["row_class"] = get_row_class(item)
         item["score_text"] = get_score_text(item)
         rows.append(item)
