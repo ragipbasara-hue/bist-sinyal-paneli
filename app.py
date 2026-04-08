@@ -1,19 +1,9 @@
 from flask import Flask, request, jsonify, render_template_string
-from datetime import datetime
+from datetime import datetime, timezone
 from supabase import create_client
-from datetime import datetime, timezone, timedelta
 import requests
 import os
 import threading
-
-
-def format_date(date_str):
-    try:
-        dt = datetime.fromisoformat(date_str)
-        return dt.strftime("%d.%m.%Y %H:%M")
-    except Exception:
-        return date_str or ""
-
 
 app = Flask(__name__)
 
@@ -284,6 +274,29 @@ HTML = """
       font-size: 12px;
       color: var(--muted);
     }
+
+    .status-badge {
+      display: inline-block;
+      min-width: 92px;
+      padding: 8px 12px;
+      border-radius: 10px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+
+    .st-early { background: #dcfce7; color: #166534; }
+    .st-strong { background: #bbf7d0; color: #14532d; }
+    .st-very-strong { background: #86efac; color: #14532d; }
+    .st-take-profit { background: #fef3c7; color: #92400e; }
+    .st-sell { background: #fee2e2; color: #991b1b; }
+    .st-empty { background: #e5e7eb; color: #374151; }
+
+    body.dark .st-early { background: #14532d; color: #dcfce7; }
+    body.dark .st-strong { background: #166534; color: #dcfce7; }
+    body.dark .st-very-strong { background: #15803d; color: #dcfce7; }
+    body.dark .st-take-profit { background: #78350f; color: #fde68a; }
+    body.dark .st-sell { background: #7f1d1d; color: #fee2e2; }
+    body.dark .st-empty { background: #374151; color: #e5e7eb; }
   </style>
 </head>
 <body>
@@ -336,11 +349,12 @@ HTML = """
         <tr>
           <th onclick="setSort('symbol')" style="cursor:pointer;">Varlık ↕</th>
           <th onclick="setSort('score')" style="cursor:pointer;">Skor ↕</th>
+          <th onclick="setSort('status')" style="cursor:pointer;">Durum ↕</th>
           <th onclick="setSort('1h')" style="cursor:pointer;">1 Saat ↕</th>
           <th onclick="setSort('4h')" style="cursor:pointer;">4 Saat ↕</th>
           <th onclick="setSort('1d')" style="cursor:pointer;">1 Gün ↕</th>
           <th onclick="setSort('1w')" style="cursor:pointer;">1 Hafta ↕</th>
-          <th onclick="setSort('updated_at')" style="cursor:pointer;">Son Güncelleme ↕</th>
+          <th onclick="setSort('updated_at_raw')" style="cursor:pointer;">Son Güncelleme ↕</th>
         </tr>
       </thead>
       <tbody id="tbody"></tbody>
@@ -356,29 +370,29 @@ let rows = [];
 let currentSort = 'default';
 let sortDirection = 'desc';
 
-function timeAgo(dateString) {
-    if (!dateString) return "-"
-
-    const now = new Date()
-    const past = new Date(dateString)
-
-    const diffMs = now - past
-    const diffMin = Math.floor(diffMs / 60000)
-    const diffHour = Math.floor(diffMin / 60)
-
-    if (diffMin < 1) return "şimdi"
-    if (diffMin < 60) return diffMin + " dk önce"
-    if (diffHour < 24) return diffHour + " saat önce"
-
-    const diffDay = Math.floor(diffHour / 24)
-    return diffDay + " gün önce"
-}
-
 function signalRank(value) {
   if (value === 'LONG' || value === 'AL') return 3;
   if (value === 'NOTR') return 2;
   if (value === 'SHORT' || value === 'SAT') return 1;
   return 0;
+}
+
+function statusRank(value) {
+  if (value === 'ÇOK GÜÇLÜ AL') return 5;
+  if (value === 'GÜÇLÜ AL') return 4;
+  if (value === 'ERKEN AL') return 3;
+  if (value === 'KÂR AL') return 2;
+  if (value === 'SAT') return 1;
+  return 0;
+}
+
+function statusClass(value) {
+  if (value === 'ÇOK GÜÇLÜ AL') return 'st-very-strong';
+  if (value === 'GÜÇLÜ AL') return 'st-strong';
+  if (value === 'ERKEN AL') return 'st-early';
+  if (value === 'KÂR AL') return 'st-take-profit';
+  if (value === 'SAT') return 'st-sell';
+  return 'st-empty';
 }
 
 function scoreRank(row) {
@@ -418,21 +432,30 @@ function applySorting(data) {
     if (currentSort === 'score') {
       aVal = scoreRank(a);
       bVal = scoreRank(b);
-    } else if (['1h', '4h', '1d', '1w'].includes(currentSort)) {
+      return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+    }
+
+    if (currentSort === 'status') {
+      aVal = statusRank(a.panel_status || '');
+      bVal = statusRank(b.panel_status || '');
+      return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+    }
+
+    if (['1h', '4h', '1d', '1w'].includes(currentSort)) {
       aVal = signalRank(a[currentSort]);
       bVal = signalRank(b[currentSort]);
-    } else if (currentSort === 'updated_at') {
-      aVal = a.updated_at || '';
-      bVal = b.updated_at || '';
+      return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+    }
+
+    if (currentSort === 'updated_at_raw') {
+      aVal = a.updated_at_raw || '';
+      bVal = b.updated_at_raw || '';
       return sortDirection === 'asc'
         ? aVal.localeCompare(bVal)
         : bVal.localeCompare(aVal);
-    } else {
-      aVal = 0;
-      bVal = 0;
     }
 
-    return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+    return 0;
   });
 
   return sorted;
@@ -483,6 +506,38 @@ function updateSummary(data) {
   document.getElementById('sumStrongShort').textContent = strongShort;
 }
 
+function formatDateTR(dateString) {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+
+  return `${day}.${month}.${year} ${hours}:${minutes}`;
+}
+
+function timeAgo(dateString) {
+  if (!dateString) return "-";
+
+  const now = new Date();
+  const past = new Date(dateString);
+
+  const diffMs = now - past;
+  const diffMin = Math.floor(diffMs / 60000);
+  const diffHour = Math.floor(diffMin / 60);
+
+  if (diffMin < 1) return "şimdi";
+  if (diffMin < 60) return diffMin + " dk önce";
+  if (diffHour < 24) return diffHour + " saat önce";
+
+  const diffDay = Math.floor(diffHour / 24);
+  return diffDay + " gün önce";
+}
+
 function renderTable() {
   const tbody = document.getElementById('tbody');
   const q = document.getElementById('search').value.trim().toUpperCase();
@@ -495,7 +550,8 @@ function renderTable() {
   const sortedRows = applySorting(filtered);
 
   tbody.innerHTML = sortedRows.map(r => {
-    const parts = (r.updated_at || '').split(' ');
+    const formatted = formatDateTR(r.updated_at_raw || '');
+    const parts = formatted.split(' ');
     const datePart = parts[0] || '';
     const timePart = parts[1] || '-';
 
@@ -508,13 +564,14 @@ function renderTable() {
           </div>
         </td>
         <td><span class="score">${r.score_text || '-'}</span></td>
+        <td><span class="status-badge ${statusClass(r.panel_status || '')}">${r.panel_status || '-'}</span></td>
         <td><span class="badge ${signalClass(r['1h'])}">${r['1h']}</span></td>
         <td><span class="badge ${signalClass(r['4h'])}">${r['4h']}</span></td>
         <td><span class="badge ${signalClass(r['1d'])}">${r['1d']}</span></td>
         <td><span class="badge ${signalClass(r['1w'])}">${r['1w']}</span></td>
-        <td class="time-cell" title="${r.updated_at}">
+        <td class="time-cell" title="${formatted}">
           <div class="time-main">🕒 ${timePart}</div>
-          <div class="time-sub">${timeAgo(r.updated_at)}</div>
+          <div class="time-sub">${timeAgo(r.updated_at_raw)}</div>
         </td>
       </tr>
     `;
@@ -625,6 +682,33 @@ def get_score_text(row):
     return f"{long_count}-{short_count}"
 
 
+def get_panel_status(tf_1h, tf_4h, tf_1d, tf_1w):
+    long_1h = tf_1h in ["LONG", "AL"]
+    long_4h = tf_4h in ["LONG", "AL"]
+    long_1d = tf_1d in ["LONG", "AL"]
+    long_1w = tf_1w in ["LONG", "AL"]
+
+    short_1h = tf_1h in ["SHORT", "SAT"]
+    short_4h = tf_4h in ["SHORT", "SAT"]
+
+    if short_1h and short_4h:
+        return "SAT"
+
+    if short_1h:
+        return "KÂR AL"
+
+    if long_1h and long_4h and long_1d and long_1w:
+        return "ÇOK GÜÇLÜ AL"
+
+    if long_1h and long_4h and long_1d:
+        return "GÜÇLÜ AL"
+
+    if long_1h and long_4h:
+        return "ERKEN AL"
+
+    return ""
+
+
 def sort_key(row):
     long_count, short_count = calc_counts(row)
     strength = max(long_count, short_count)
@@ -651,6 +735,18 @@ def send_telegram_message(text):
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def send_telegram_async(text):
+    def _runner():
+        try:
+            send_telegram_message(text)
+        except Exception as e:
+            print("send_telegram_async error:", str(e))
+
+    thread = threading.Thread(target=_runner)
+    thread.daemon = True
+    thread.start()
 
 
 def detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w):
@@ -686,68 +782,12 @@ def format_signal_message(symbol, level, price):
         "GUCLU_AL": "✅ GÜÇLÜ AL",
         "COK_GUCLU_AL": "🚀 ÇOK GÜÇLÜ AL",
         "KAR_AL": "⚠️ KÂR AL",
-        "CIK": "🔻 SAT",
-        "TREND_BITTI": "📉 DÜŞÜŞ TRENDİ"
+        "CIK": "🔻 SAT"
     }
 
     title = titles.get(level, level or "")
     return f"{symbol} — {title}\nFiyat: {price}"
-def process_webhook(payload):
-    try:
-        symbol = str(payload.get("symbol", "")).upper().strip()
-        price = str(payload.get("price", "")).strip()
-        signals = payload.get("signals", {})
 
-        if not symbol or not isinstance(signals, dict):
-            return
-
-        valid = {"LONG", "SHORT", "NOTR", "AL", "SAT", "YOK"}
-
-        tf_1h = str(signals.get("1h", "YOK")).upper().strip()
-        tf_4h = str(signals.get("4h", "YOK")).upper().strip()
-        tf_1d = str(signals.get("1d", "YOK")).upper().strip()
-        tf_1w = str(signals.get("1w", "YOK")).upper().strip()
-
-        tf_1h = tf_1h if tf_1h in valid else "YOK"
-        tf_4h = tf_4h if tf_4h in valid else "YOK"
-        tf_1d = tf_1d if tf_1d in valid else "YOK"
-        tf_1w = tf_1w if tf_1w in valid else "YOK"
-
-        TR_TIMEZONE = timezone(timedelta(hours=3))
-        now = datetime.now(TR_TIMEZONE).isoformat()
-
-        supabase.table("watchlist").upsert(
-            {"symbol": symbol},
-            on_conflict="symbol"
-        ).execute()
-
-        existing = supabase.table("signals").select("alert_level").eq("symbol", symbol).execute()
-        last_level = ""
-        if existing.data:
-            last_level = existing.data[0].get("alert_level") or ""
-
-        level = detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w)
-
-        supabase.table("signals").upsert(
-            {
-                "symbol": symbol,
-                "tf_1h": tf_1h,
-                "tf_4h": tf_4h,
-                "tf_1d": tf_1d,
-                "tf_1w": tf_1w,
-                "updated_at": now,
-                "last_tf": "multi",
-                "alert_level": level or ""
-            },
-            on_conflict="symbol"
-        ).execute()
-
-        if level and level != last_level:
-            telegram_text = format_signal_message(symbol, level, price)
-            send_telegram_message(telegram_text)
-
-    except Exception as e:
-        print("process_webhook error:", str(e))
 
 @app.route("/")
 def index():
@@ -768,14 +808,20 @@ def api_table():
     rows = []
     for symbol in watchlist:
         s = signals_map.get(symbol, {})
+        tf_1h = s.get("tf_1h", "YOK")
+        tf_4h = s.get("tf_4h", "YOK")
+        tf_1d = s.get("tf_1d", "YOK")
+        tf_1w = s.get("tf_1w", "YOK")
+
         item = {
             "symbol": symbol,
-            "1h": s.get("tf_1h", "YOK"),
-            "4h": s.get("tf_4h", "YOK"),
-            "1d": s.get("tf_1d", "YOK"),
-            "1w": s.get("tf_1w", "YOK"),
-            "updated_at": format_date(s.get("updated_at")) if s.get("updated_at") else "",
-            "last_tf": s.get("last_tf") or ""
+            "1h": tf_1h,
+            "4h": tf_4h,
+            "1d": tf_1d,
+            "1w": tf_1w,
+            "updated_at_raw": s.get("updated_at") or "",
+            "last_tf": s.get("last_tf") or "",
+            "panel_status": get_panel_status(tf_1h, tf_4h, tf_1d, tf_1w)
         }
         item["row_class"] = get_row_class(item)
         item["score_text"] = get_score_text(item)
@@ -825,11 +871,15 @@ def test_telegram():
 def webhook():
     payload = request.get_json(force=True, silent=True) or {}
 
-    thread = threading.Thread(target=process_webhook, args=(payload,))
-    thread.daemon = True
-    thread.start()
+    symbol = str(payload.get("symbol", "")).upper().strip()
+    price = str(payload.get("price", "")).strip()
+    signals = payload.get("signals", {})
 
-    return jsonify({"ok": True}), 200
+    if not symbol or not isinstance(signals, dict):
+        return jsonify({
+            "ok": False,
+            "error": "Geçersiz veri. Beklenen: symbol, price ve signals objesi"
+        }), 400
 
     valid = {"LONG", "SHORT", "NOTR", "AL", "SAT", "YOK"}
 
@@ -843,59 +893,56 @@ def webhook():
     tf_1d = tf_1d if tf_1d in valid else "YOK"
     tf_1w = tf_1w if tf_1w in valid else "YOK"
 
-    now = datetime.now(TR_TIMEZONE).isoformat()
-
-    supabase.table("watchlist").upsert(
-        {"symbol": symbol},
-        on_conflict="symbol"
-    ).execute()
-
-    existing = supabase.table("signals").select("alert_level").eq("symbol", symbol).execute()
-    last_level = ""
-    if existing.data:
-        last_level = existing.data[0].get("alert_level") or ""
-
-    level = detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w)
-
-    supabase.table("signals").upsert(
-        {
-            "symbol": symbol,
-            "tf_1h": tf_1h,
-            "tf_4h": tf_4h,
-            "tf_1d": tf_1d,
-            "tf_1w": tf_1w,
-            "updated_at": now,
-            "last_tf": "multi",
-            "alert_level": level or ""
-        },
-        on_conflict="symbol"
-    ).execute()
-
-    telegram_result = None
-    error_message = ""
+    now = datetime.now(timezone.utc).isoformat()
 
     try:
+        supabase.table("watchlist").upsert(
+            {"symbol": symbol},
+            on_conflict="symbol"
+        ).execute()
+
+        existing = supabase.table("signals").select("alert_level").eq("symbol", symbol).execute()
+        last_level = ""
+        if existing.data:
+            last_level = existing.data[0].get("alert_level") or ""
+
+        level = detect_signal_level(tf_1h, tf_4h, tf_1d, tf_1w)
+
+        supabase.table("signals").upsert(
+            {
+                "symbol": symbol,
+                "tf_1h": tf_1h,
+                "tf_4h": tf_4h,
+                "tf_1d": tf_1d,
+                "tf_1w": tf_1w,
+                "updated_at": now,
+                "last_tf": "multi",
+                "alert_level": level or ""
+            },
+            on_conflict="symbol"
+        ).execute()
+
         if level and level != last_level:
             telegram_text = format_signal_message(symbol, level, price)
-            telegram_result = send_telegram_message(telegram_text)
-    except Exception as e:
-        error_message = str(e)
+            send_telegram_async(telegram_text)
 
-    return jsonify({
-        "ok": True,
-        "symbol": symbol,
-        "price": price,
-        "signals": {
-            "1h": tf_1h,
-            "4h": tf_4h,
-            "1d": tf_1d,
-            "1w": tf_1w
-        },
-        "level": level or "",
-        "last_level": last_level,
-        "telegram_result": telegram_result,
-        "error": error_message
-    })
+        return jsonify({
+            "ok": True,
+            "symbol": symbol,
+            "price": price,
+            "signals": {
+                "1h": tf_1h,
+                "4h": tf_4h,
+                "1d": tf_1d,
+                "1w": tf_1w
+            },
+            "level": level or "",
+            "last_level": last_level
+        }), 200
+
+    except Exception as e:
+        print("webhook error:", str(e))
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/seed")
