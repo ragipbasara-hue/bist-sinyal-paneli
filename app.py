@@ -506,10 +506,18 @@ function updateSummary(data) {
   document.getElementById('sumStrongShort').textContent = strongShort;
 }
 
-function formatDateTR(dateString) {
-  if (!dateString) return '';
+function parseUTCDate(dateString) {
+  if (!dateString) return null;
 
-  const date = new Date(dateString);
+  const hasTimezone = /Z$|[+-]\d{2}:\d{2}$/.test(dateString);
+  const normalized = hasTimezone ? dateString : dateString + "Z";
+
+  return new Date(normalized);
+}
+
+function formatDateTR(dateString) {
+  const date = parseUTCDate(dateString);
+  if (!date) return '';
 
   return new Intl.DateTimeFormat('tr-TR', {
     timeZone: 'Europe/Istanbul',
@@ -523,10 +531,11 @@ function formatDateTR(dateString) {
 }
 
 function timeAgo(dateString) {
-  if (!dateString) return "-";
+  const pastDate = parseUTCDate(dateString);
+  if (!pastDate) return "-";
 
-  const now = new Date().getTime();
-  const past = new Date(dateString).getTime();
+  const now = Date.now();
+  const past = pastDate.getTime();
 
   const diffMs = now - past;
   const diffMin = Math.floor(diffMs / 60000);
