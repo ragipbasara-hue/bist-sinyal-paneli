@@ -508,23 +508,25 @@ function updateSummary(data) {
 
 function formatDateTR(dateString) {
   if (!dateString) return '';
+
   const date = new Date(dateString);
 
-  const day = String(date.getDate()).padStart(2, '0');
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const year = date.getFullYear();
-
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-
-  return `${day}.${month}.${year} ${hours}:${minutes}`;
+  return new Intl.DateTimeFormat('tr-TR', {
+    timeZone: 'Europe/Istanbul',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(date);
 }
 
 function timeAgo(dateString) {
   if (!dateString) return "-";
 
-  const now = new Date();
-  const past = new Date(dateString);
+  const now = new Date().getTime();
+  const past = new Date(dateString).getTime();
 
   const diffMs = now - past;
   const diffMin = Math.floor(diffMs / 60000);
